@@ -3,7 +3,6 @@
 import re
 from pathlib import Path
 import numpy as np
-import dask
 
 __version__ = '0.1'
 __author__ = 'Kolja Glogowski'
@@ -66,7 +65,9 @@ def parse_number_expr(expr):
 
 if __name__ == '__main__':
     import argparse
-    from dask.diagnostics import ProgressBar
+    from functools import partial
+    from multiprocessing import Pool
+    from tqdm import tqdm
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -99,13 +100,13 @@ if __name__ == '__main__':
     fpath_list = create_fpath_list(dpath_list, num_files_per_dir)
     create_directories(out_dir, dpath_list, exist_ok=args.overwrite)
 
-    dask.config.set(num_workers=args.num_workers)
-    job_list = [dask.delayed(gen_rnd_data_file)(
-                    fpath,
-                    size=filesize,
-                    chunksize=args.chunksize,
-                    overwrite=args.overwrite)
-                for fpath in fpath_list]
+    task_func = partial(
+        gen_rnd_data_file,
+        size=filesize,
+        chunksize=args.chunksize,
+        overwrite=args.overwrite)
 
-    with ProgressBar():
-        dask.compute(*job_list)
+    with Pool(processes=args.num_workers) as pool:
+        with tqdm(total=len(fpath_list), unit=' files') as pbar:
+            for res in pool.imap_unordered(task_func, fpath_list):
+                pbar.update(1)

@@ -54,6 +54,7 @@ def gen_rnd_data_file(fpath, size, chunksize=1048576, overwrite=False):
             n = min(size, chunksize)
             f.write(np.random.bytes(n))
             size -= n
+    return p
 
 
 def parse_number_expr(expr):
@@ -67,14 +68,18 @@ if __name__ == '__main__':
     import argparse
     from functools import partial
     from multiprocessing import Pool
-    from tqdm import tqdm
+
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        tqdm = None
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '-n', dest='filesize', metavar='FILESIZE', type=str, required=True,
-        help='File sizes in bytes')
+        '-s', dest='filesize', metavar='FILESIZE', type=str, required=True,
+        help='Size of generated files in bytes')
     parser.add_argument(
-        '-f', dest='num_files_per_dir', metavar='NUM_FILES', type=str,
+        '-n', dest='num_files_per_dir', metavar='NUM_FILES', type=str,
         required=True, help='Number of files per directory')
     parser.add_argument(
         '-d', dest='num_subdirs', metavar='NUM_DIRS', type=str, default='0',
@@ -83,13 +88,25 @@ if __name__ == '__main__':
         '-c', dest='chunksize', metavar='CHUNKSIZE', type=int, default=1048576,
         help='Chunk size used for writing files (default: 1048576)')
     parser.add_argument(
-        '--workers', dest='num_workers', metavar='N', type=int, default=1,
-        help='Number of worker threads (default: 1)')
+        '-j', dest='num_workers', metavar='NUM_JOBS', type=int,
+        default=1, help='Number of parallel jobs (default: 1)')
     parser.add_argument(
-        '--overwrite', action='store_true', help='Overwrite existing files')
+        '-f', '--overwrite', action='store_true',
+        help='Overwrite existing files')
+    parser.add_argument(
+        '-P', '--progress', action='store_true',
+        help='Display progress bar')
+    parser.add_argument(
+        '-v', '--verbose', action='store_true',
+        help='Print verbose output')
     parser.add_argument(
         dest='out_dir', metavar='DIR', nargs=1, help='Output directory')
     args = parser.parse_args()
+
+    if args.progress and tqdm is None:
+        raise RuntimeError(
+            'Cannot show progress bar. Install the tqdm package to use '
+            'this feature.')
 
     filesize = parse_number_expr(args.filesize)
     num_files_per_dir = parse_number_expr(args.num_files_per_dir)
@@ -107,6 +124,13 @@ if __name__ == '__main__':
         overwrite=args.overwrite)
 
     with Pool(processes=args.num_workers) as pool:
-        with tqdm(total=len(fpath_list), unit=' files') as pbar:
+        if args.progress:
+            with tqdm(total=len(fpath_list), unit=' files') as pbar:
+                for res in pool.imap_unordered(task_func, fpath_list):
+                    if args.verbose:
+                        pbar.write(str(res))
+                    pbar.update(1)
+        else:
             for res in pool.imap_unordered(task_func, fpath_list):
-                pbar.update(1)
+                if args.verbose:
+                    print(str(res))

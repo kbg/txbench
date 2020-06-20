@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import re
+import hashlib
 from pathlib import Path
 import numpy as np
 
@@ -41,19 +42,57 @@ def create_directories(root_dir, dpath_list, exist_ok=False):
         dpath.mkdir(exist_ok=exist_ok)
 
 
-def gen_rnd_data_file(fpath, size, chunksize=1048576, overwrite=False):
+def init_rng_legacy(seed=None):
+    """Create a legacy RNG instance based on NumPy's RandomState class"""
+    seed = seed % 2**32  # RandomState only supports unsigned 32-bit ints
+    return np.random.RandomState(seed)  # pylint: disable=E1101
+
+
+# If available, use new-style random generator classes as a default (these
+# classes were introduced in NumPy version 1.17.0).
+_np_has_new_style_rngs = hasattr(np.random, 'Generator')
+if _np_has_new_style_rngs:
+    def init_rng_pcg64(seed=None):
+        """Create a new-style RNG instance based on NumPy's Generator class"""
+        return np.random.Generator(np.random.PCG64(seed))
+    init_rng_default = init_rng_pcg64
+else:
+    init_rng_pcg64 = None
+    init_rng_default = init_rng_legacy
+
+
+def compute_initial_seed(filesize, num_files, num_subdirs, seed):
+    """Compute initial random seed from characteristic job parameters"""
+    data = b'%d,%d,%d,%d' % (filesize, num_files, num_subdirs, seed)
+    hexdigest = hashlib.sha1(data).hexdigest()
+    return int(hexdigest[:16], base=16)
+
+
+def gen_rnd_data_file(fpath, size, rng=None, chunksize=1048576,
+                      overwrite=False, dryrun=False):
     size = int(size)
     chunksize = int(chunksize)
     if chunksize <= 0:
         raise ValueError('Chunksize must be greater than 0')
+
     p = Path(fpath)
     if p.exists() and not overwrite:
         raise FileExistsError('File already exists: \'{}\''.format(p))
-    with p.open(mode='wb', buffering=chunksize) as f:
+
+    if rng is None:
+        rng = init_rng_default()
+
+    if dryrun:
         while size > 0:
             n = min(size, chunksize)
-            f.write(np.random.bytes(n))
+            rng.bytes(n)
             size -= n
+    else:
+        with p.open(mode='wb', buffering=chunksize) as f:
+            while size > 0:
+                n = min(size, chunksize)
+                f.write(rng.bytes(n))
+                size -= n
     return p
 
 
@@ -66,7 +105,6 @@ def parse_number_expr(expr):
 
 if __name__ == '__main__':
     import argparse
-    from functools import partial
     from multiprocessing import Pool
 
     try:
@@ -91,6 +129,17 @@ if __name__ == '__main__':
         '-j', dest='num_workers', metavar='NUM_JOBS', type=int,
         default=1, help='Number of parallel jobs (default: 1)')
     parser.add_argument(
+        '-S', '--seed', type=int,
+        help='Initial seed for generating random data')
+    parser.add_argument(
+        '--rng', choices=['pcg64', 'legacy'],
+        help=('Random number generator. If not explicitely specified, '
+              '"pcg64" is used for newer NumPy versions (>= 1.7.0) and '
+              '"legacy" is used for older versions (< 1.7.0).'))
+    parser.add_argument(
+        '--dry-run', dest='dryrun', action='store_true',
+        help='Do not write anything to to disk')
+    parser.add_argument(
         '-f', '--overwrite', action='store_true',
         help='Overwrite existing files')
     parser.add_argument(
@@ -112,25 +161,62 @@ if __name__ == '__main__':
     num_files_per_dir = parse_number_expr(args.num_files_per_dir)
     num_subdirs = parse_number_expr(args.num_subdirs)
 
+    # The total number of files is (num_dirs * num_files_per_dir). If
+    # num_subdirs is 0, the total number of directories is still 1.
+    total_num_files = num_files_per_dir*(
+        num_subdirs if num_subdirs > 0 else 1)
+
+    if args.seed is not None:
+        # The initial random seed is computed from all characteristic
+        # parameters, including the user-suplied seed.
+        initial_seed = compute_initial_seed(
+            filesize=filesize,
+            num_files=num_files_per_dir,
+            num_subdirs=num_subdirs,
+            seed=args.seed)
+    else:
+        # No seed was specified, so we just use a random integer as initial
+        # seed for generating random data.
+        initial_seed = np.random.randint(2**63)
+
+    if args.rng == 'pcg64':
+        init_rng = init_rng_pcg64
+    elif args.rng == 'legacy':
+        init_rng = init_rng_legacy
+    else:
+        init_rng = init_rng_default
+
     out_dir = args.out_dir[0]
     dpath_list = create_dpath_list(out_dir, num_subdirs)
     fpath_list = create_fpath_list(dpath_list, num_files_per_dir)
-    create_directories(out_dir, dpath_list, exist_ok=args.overwrite)
 
-    task_func = partial(
-        gen_rnd_data_file,
-        size=filesize,
-        chunksize=args.chunksize,
-        overwrite=args.overwrite)
+    # Generate a sequence of seeded RNGs
+    rng_iter = (init_rng(seed) for seed in range(
+        initial_seed, initial_seed + total_num_files))
+
+    if not args.dryrun:
+        create_directories(out_dir, dpath_list, exist_ok=args.overwrite)
+
+    # We need to create a wrapper function that unpacks (fpath, rng)
+    # tuples, because Pool.imap_unordered() only supports a single variable
+    # argument and there is no starmap() equivalent for imap().
+    def task_func(args, size=filesize, chunksize=args.chunksize,
+                  overwrite=args.overwrite, dryrun=args.dryrun):
+        fpath, rng = args
+        return gen_rnd_data_file(
+            fpath=fpath, size=size, rng=rng, chunksize=chunksize,
+            overwrite=overwrite, dryrun=dryrun)
 
     with Pool(processes=args.num_workers) as pool:
         if args.progress:
-            with tqdm(total=len(fpath_list), unit=' files') as pbar:
-                for res in pool.imap_unordered(task_func, fpath_list):
+            with tqdm(total=total_num_files, unit='files') as pbar:
+                for res in pool.imap_unordered(
+                        task_func, zip(fpath_list, rng_iter)):
                     if args.verbose:
                         pbar.write(str(res))
                     pbar.update(1)
         else:
-            for res in pool.imap_unordered(task_func, fpath_list):
+            for res in pool.imap_unordered(
+                    task_func, zip(fpath_list, rng_iter)):
                 if args.verbose:
                     print(str(res))

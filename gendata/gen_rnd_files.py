@@ -68,7 +68,7 @@ def compute_initial_seed(filesize, num_files, num_subdirs, seed):
     return int(hexdigest[:16], base=16)
 
 
-def gen_rnd_data_file(fpath, size, rng=None, chunksize=1048576,
+def gen_rnd_data_file(fpath, size, rng=None, chunksize=65536,
                       overwrite=False, dryrun=False):
     size = int(size)
     chunksize = int(chunksize)
@@ -96,11 +96,18 @@ def gen_rnd_data_file(fpath, size, rng=None, chunksize=1048576,
     return p
 
 
-def parse_number_expr(expr):
+def parse_number_expr(expr, vmin=None, vmax=None):
     if re.match(r'^[0-9/\+\*\-\(\)e]+$', expr):
-        return int(eval(expr))
+        value = int(eval(expr))
     else:
-        raise RuntimeError('Cannot parse argument: \'{}\''.format(name, expr))
+        raise ValueError('Cannot parse argument: \'{}\''.format(expr))
+
+    if vmin is not None and value < vmin:
+        raise ValueError('Value is lower than {}: {}'.format(vmin, value))
+    if vmax is not None and value > vmax:
+        raise ValueError('Value is greater than {}: {}'.format(vmax, value))
+
+    return value
 
 
 if __name__ == '__main__':
@@ -123,8 +130,8 @@ if __name__ == '__main__':
         '-d', dest='num_subdirs', metavar='NUM_DIRS', type=str, default='0',
         help='Number of subdirectories (default: 0)')
     parser.add_argument(
-        '-c', dest='chunksize', metavar='CHUNKSIZE', type=int, default=1048576,
-        help='Chunk size used for writing files (default: 1048576)')
+        '-c', dest='chunksize', type=str, default='65536',
+        help='Chunk size used for writing files (default: 65536)')
     parser.add_argument(
         '-j', dest='num_workers', metavar='NUM_JOBS', type=int,
         default=1, help='Number of parallel jobs (default: 1)')
@@ -157,9 +164,10 @@ if __name__ == '__main__':
             'Cannot show progress bar. Install the tqdm package to use '
             'this feature.')
 
-    filesize = parse_number_expr(args.filesize)
-    num_files_per_dir = parse_number_expr(args.num_files_per_dir)
-    num_subdirs = parse_number_expr(args.num_subdirs)
+    filesize = parse_number_expr(args.filesize, vmin=0)
+    num_files_per_dir = parse_number_expr(args.num_files_per_dir, vmin=1)
+    num_subdirs = parse_number_expr(args.num_subdirs, vmin=0)
+    chunksize = parse_number_expr(args.chunksize, vmin=1)
 
     # The total number of files is (num_dirs * num_files_per_dir). If
     # num_subdirs is 0, the total number of directories is still 1.
@@ -200,7 +208,7 @@ if __name__ == '__main__':
     # We need to create a wrapper function that unpacks (fpath, rng)
     # tuples, because Pool.imap_unordered() only supports a single variable
     # argument and there is no starmap() equivalent for imap().
-    def task_func(args, size=filesize, chunksize=args.chunksize,
+    def task_func(args, size=filesize, chunksize=chunksize,
                   overwrite=args.overwrite, dryrun=args.dryrun):
         fpath, rng = args
         return gen_rnd_data_file(

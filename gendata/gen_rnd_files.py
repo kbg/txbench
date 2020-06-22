@@ -10,7 +10,7 @@ __author__ = 'Kolja Glogowski'
 __license__ = 'MIT'
 
 
-def create_dpath_list(root_dir, num_subdirs=0):
+def create_dir_path_list(root_dir, num_subdirs=0):
     root = Path(root_dir)
     res = []
     if num_subdirs == 0:
@@ -23,14 +23,12 @@ def create_dpath_list(root_dir, num_subdirs=0):
     return res
 
 
-def create_fpath_list(dpath_list, num_files_per_dir):
-    res = []
+def create_file_path_iter(dpath_list, num_files_per_dir):
     for dpath in dpath_list:
         ndigits = int(np.log10(num_files_per_dir)) + 1
         for i in range(num_files_per_dir):
             fpath = dpath / 'file{:0{width}}'.format(i, width=ndigits)
-            res.append(fpath)
-    return res
+            yield fpath
 
 
 def create_directories(root_dir, dpath_list, exist_ok=False):
@@ -68,8 +66,8 @@ def compute_initial_seed(filesize, num_files, num_subdirs, seed):
     return int(hexdigest[:16], base=16)
 
 
-def gen_rnd_data_file(fpath, size, rng=None, chunksize=65536,
-                      overwrite=False, dryrun=False):
+def create_random_data_file(fpath, size, rng=None, chunksize=65536,
+                            overwrite=False, dryrun=False):
     size = int(size)
     chunksize = int(chunksize)
     if chunksize <= 0:
@@ -195,10 +193,12 @@ if __name__ == '__main__':
         init_rng = init_rng_default
 
     out_dir = args.out_dir[0]
-    dpath_list = create_dpath_list(out_dir, num_subdirs)
-    fpath_list = create_fpath_list(dpath_list, num_files_per_dir)
+    dpath_list = create_dir_path_list(out_dir, num_subdirs)
 
-    # Generate a sequence of seeded RNGs
+    # Generate sequence of file paths
+    fpath_iter = create_file_path_iter(dpath_list, num_files_per_dir)
+
+    # Generate sequence of seeded RNGs
     rng_iter = (init_rng(seed) for seed in range(
         initial_seed, initial_seed + total_num_files))
 
@@ -211,7 +211,7 @@ if __name__ == '__main__':
     def task_func(args, size=filesize, chunksize=chunksize,
                   overwrite=args.overwrite, dryrun=args.dryrun):
         fpath, rng = args
-        return gen_rnd_data_file(
+        return create_random_data_file(
             fpath=fpath, size=size, rng=rng, chunksize=chunksize,
             overwrite=overwrite, dryrun=dryrun)
 
@@ -219,12 +219,12 @@ if __name__ == '__main__':
         if args.progress:
             with tqdm(total=total_num_files, unit='files') as pbar:
                 for res in pool.imap_unordered(
-                        task_func, zip(fpath_list, rng_iter)):
+                        task_func, zip(fpath_iter, rng_iter)):
                     if args.verbose:
                         pbar.write(str(res))
                     pbar.update(1)
         else:
             for res in pool.imap_unordered(
-                    task_func, zip(fpath_list, rng_iter)):
+                    task_func, zip(fpath_iter, rng_iter)):
                 if args.verbose:
                     print(str(res))

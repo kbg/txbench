@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 import numpy as np
 
-__version__ = '0.1'
+__version__ = '0.2.0'
 __author__ = 'Kolja Glogowski'
 __license__ = 'MIT'
 
@@ -153,6 +153,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '-v', '--verbose', action='store_true',
         help='Print verbose output')
+    parser.add_argument('--version', action='version', version=__version__)
     parser.add_argument(
         dest='out_dir', metavar='DIR', nargs=1, help='Output directory')
     args = parser.parse_args()

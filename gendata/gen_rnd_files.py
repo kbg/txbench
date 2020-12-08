@@ -12,7 +12,7 @@ try:
 except ImportError:
     tqdm = None
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 __author__ = 'Kolja Glogowski'
 __license__ = 'MIT'
 
@@ -218,14 +218,14 @@ class RandomFileGenerator:
             yield root_path
         else:
             ndigits = int(np.log10(self._num_subdirs)) + 1
-            for i in range(self._num_subdirs):
+            for i in range(1, self._num_subdirs + 1):
                 yield root_path / 'dir{:0{width}}'.format(i, width=ndigits)
 
     def file_paths(self, root_dir):
         """Returns an iterator for paths of the files to be created"""
+        ndigits = int(np.log10(self._num_files)) + 1
         for dpath in self.dir_paths(root_dir):
-            ndigits = int(np.log10(self._num_files)) + 1
-            for i in range(self._num_files):
+            for i in range(1, self._num_files + 1):
                 yield dpath / 'file{:0{width}}'.format(i, width=ndigits)
 
     def _create_directories(self, root_dir, exist_ok=False):
